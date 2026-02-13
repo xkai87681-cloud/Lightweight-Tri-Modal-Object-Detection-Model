@@ -1,0 +1,34 @@
+{
+  "detection": {
+    "precision": 0.7381183310008551,
+    "recall": 0.6849684962331516,
+    "f1": 0.7105503870558267
+  },
+  "segmentation": {},
+  "attribute": {
+    "coverage": 0.8169642857142857,
+    "diversity": 15,
+    "unique_attrs": [
+      "Shorts",
+      "Boots",
+      "Old",
+      "LStripe",
+      "Female",
+      "Front",
+      "Side",
+      "LongSlv",
+      "ShortSlv",
+      "LPattern",
+      "Skirt",
+      "Pants",
+      "Back",
+      "HoldObj",
+      "ShldrBag"
+    ]
+  },
+  "notes": {
+    "detection": "Evaluated on BDD100K validation set",
+    "segmentation": "Requires GT masks for full evaluation",
+    "attribute": "Evaluated on large targets only (>60x120px)"
+  }
+}
