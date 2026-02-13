@@ -1,0 +1,189 @@
+# Cityscapes Detection - 修复配置
+# 针对Box Loss停滞和正负样本不平衡问题的优化版本
+
+# ===== 数据集路径配置 =====
+data:
+  cityscapes_det:
+    root: "./cityscapes_detection"
+    train_img: "train"
+    val_img: "val"
+    num_classes: 2
+
+  subset:
+    enabled: false
+    det_samples: null
+
+# ===== 模型架构配置 =====
+model:
+  backbone:
+    type: "mobilenetv3_large"
+    pretrained: true
+    out_indices: [6, 12, 16]
+
+  neck:
+    type: "PANet"
+    out_channels: 256
+
+  heads:
+    detection:
+      num_classes: 2
+      anchors_per_level: 1  # ✅ 回退到1（减少负样本）
+      strides: [8, 16, 32]
+
+  adapter:
+    type: "SE"
+    reduction: 16
+
+  # 属性头（占位，检测训练时不使用）
+  attribute:
+    num_attrs: 26
+    hidden_dim: 512
+    dropout: 0.3
+
+  # 分割头（占位）
+  segmentation:
+    num_classes: 2
+    mid_channels: 128
+    upsample_ratio: 4
+
+# ===== 损失函数配置（核心修复）=====
+loss:
+  detection:
+    bbox_loss: "CIoU"
+    obj_loss: "Focal"
+    cls_loss: "BCE"
+
+    # ✅ 大幅增加box loss权重（解决定位问题）
+    box_loss_weight: 7.0    # 从1.0增加到7.0
+    obj_loss_weight: 1.0
+    cls_loss_weight: 0.5    # 降低分类权重，避免压制box
+
+    # Focal Loss参数
+    use_focal_obj: true
+    focal_alpha: 0.5
+    focal_gamma: 5.0        # ✅ 从4.0增加到5.0（更激进困难样本挖掘）
+
+    # ✅ 进一步增加正样本权重
+    pos_weight: 200.0       # 从100增加到200
+
+    # Label Smoothing
+    label_smoothing: 0.0    # ✅ 关闭label smoothing，避免影响box回归
+
+# ===== 训练配置（核心修复）=====
+train:
+  # 基础设置
+  epochs: 100              # ✅ 先训练100 epochs测试效果
+  batch_size: 32
+  num_workers: 4
+  pin_memory: true
+  prefetch_factor: 2
+
+  # 输入尺寸
+  img_size: 640
+
+  # 数据增强（简化，避免过度增强影响box学习）
+  augmentation:
+    horizontal_flip: 0.5
+
+    shift_scale_rotate:
+      enabled: false        # ✅ 关闭几何变换，简化box学习
+
+    color_jitter:
+      brightness: 0.1       # ✅ 降低强度
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.05
+      prob: 0.3
+
+    random_brightness_contrast:
+      enabled: false        # ✅ 关闭
+
+    mosaic:
+      enabled: false        # ✅ 关闭Mosaic（会干扰box学习）
+
+    mixup:
+      enabled: false
+
+  # ✅ 优化器配置（核心修复）
+  optimizer:
+    type: "AdamW"
+    lr: 0.001              # ✅ 从0.01降低到0.001（降低10倍）
+    weight_decay: 0.0005
+    betas: [0.9, 0.999]
+
+  # ✅ 学习率调度（更温和的策略）
+  scheduler:
+    type: "CosineAnnealingLR"
+    warmup_epochs: 10      # ✅ 增加warmup到10 epochs
+    warmup_lr: 0.0001      # ✅ 更小的warmup起始lr
+    min_lr: 0.00001        # ✅ 更小的最小lr
+
+  # 梯度累积
+  accumulate_grad: 1
+
+  # 混合精度训练
+  amp: true
+
+  # EMA
+  ema:
+    enabled: true
+    decay: 0.9999
+
+# ===== 验证配置 =====
+val:
+  interval: 5
+  batch_size: 16
+  img_size: 640
+
+# ===== 保存与日志 =====
+output:
+  save_dir: "runs/cityscapes_det_fixed"  # ✅ 新的保存目录
+  save_interval: 10
+  save_best: true
+  resume: null
+
+# ===== 早停机制 =====
+early_stopping:
+  enabled: true
+  patience: 20           # ✅ 增加patience到20
+  min_delta: 0.001
+  monitor: "val_det_loss"
+
+logging:
+  use_tensorboard: true
+  log_dir: "runs/logs_fixed"
+  print_interval: 20
+
+# ===== 设备配置 =====
+device:
+  gpu_ids: [0]
+  distributed: false
+  seed: 42
+
+# ===== 修复说明 =====
+# 本配置针对以下问题进行了修复：
+#
+# 1. Box Loss停滞（1.0 → 1.01）
+#    修复：
+#    - lr: 0.01 → 0.001（降低10倍）
+#    - box_loss_weight: 1.0 → 7.0（增加7倍）
+#    - 关闭label_smoothing
+#    - 简化数据增强
+#
+# 2. 正负样本严重不平衡（1:1500）
+#    修复：
+#    - anchors_per_level: 3 → 1（减少负样本）
+#    - pos_weight: 100 → 200（增加正样本权重）
+#    - focal_gamma: 4.0 → 5.0（更激进困难样本挖掘）
+#
+# 3. 训练不稳定
+#    修复：
+#    - warmup_epochs: 5 → 10（更长warmup）
+#    - warmup_lr: 0.0001（更小起始lr）
+#    - patience: 15 → 20（更宽容的早停）
+#
+# 预期效果：
+# - Box Loss: 1.01 → 0.5-0.7（Epoch 50）
+# - 总Loss: 5.74 → 3.5-4.5（Epoch 50）
+# - mAP@0.5: ? → 0.45-0.60
+# - 正负比: 1:1500 → 1:400-600

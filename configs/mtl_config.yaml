@@ -1,0 +1,219 @@
+# Multi-Task Learning Configuration File
+# 三任务配置：Detection + Attribute + Segmentation
+
+# ===== 数据集路径配置 =====
+data:
+  # COCO Detection (Person & Car)
+  coco:
+    root: "./coco2017"  # 当前项目目录下
+    train_img: "train2017"
+    val_img: "val2017"
+    train_ann: "annotations/instances_train2017.json"
+    val_ann: "annotations/instances_val2017.json"
+    classes: [1, 3]  # 1: person, 3: car (COCO类别ID)
+
+  # PA100K Attribute Classification
+  pa100k:
+    root: "./PA100K"  # 当前项目目录下
+    train_img: "release_data/release_data"
+    val_img: "release_data/release_data"
+    train_ann: "annotation/annotation.pkl"  # PA100K标准格式
+    val_ann: "annotation/annotation.pkl"
+    num_attrs: 26  # PA100K常用26个主要属性
+
+  # Cityscapes Semantic Segmentation (Road & Lane)
+  cityscapes:
+    root: "./cityscapes"  # 当前项目目录下
+    train_img: "leftImg8bit/train"
+    val_img: "leftImg8bit/val"
+    train_label: "gtFine/train"
+    val_label: "gtFine/val"
+    num_classes: 2  # Road(0), Lane(1) - 简化分类
+    ignore_index: 255
+
+  # 数据子集设置（用于分阶段训练）
+  subset:
+    enabled: false       # 是否启用子集训练
+    det_samples: null    # 检测数据集样本数（null=全部）
+    attr_samples: null   # 属性数据集样本数
+    seg_samples: null    # 分割数据集样本数
+
+# ===== 模型架构配置 =====
+model:
+  # Backbone
+  backbone:
+    type: "mobilenetv3_large"
+    pretrained: true
+    out_indices: [6, 12, 16]  # MobileNetV3 features层索引: C3(stride=8), C4(stride=16), C5(stride=32)
+
+  # Shared Neck (PANet/FPN)
+  neck:
+    type: "PANet"
+    # in_channels会自动从backbone获取，无需手动配置
+    out_channels: 256  # P3, P4, P5统一通道数
+
+  # Task Adapters
+  adapter:
+    type: "SEAdapter"  # or "ECAAdapter"
+    reduction: 16
+    use_residual: true
+    use_layernorm: true
+
+  # Task Heads
+  heads:
+    detection:
+      num_classes: 2  # person, car
+      anchors_per_level: 1  # CRITICAL FIX: YOLOv8 is anchor-free (1 anchor per location)
+      strides: [8, 16, 32]  # P3, P4, P5
+
+    attribute:
+      num_attrs: 26
+      hidden_dim: 512
+      dropout: 0.3
+
+    segmentation:
+      num_classes: 2
+      upsample_ratio: 8  # 从P3上采样到原图全分辨率
+      mid_channels: 128
+
+# ===== 损失函数配置 =====
+loss:
+  # 自动加权（log_var方式）
+  auto_weight: true
+  # CRITICAL FIX: Initialize to favor detection (negative log_var = higher weight)
+  # log_var → weight mapping: weight = exp(-log_var)
+  # -2.0 → ~7.4x weight, 0.0 → 1.0x weight, 1.0 → ~0.37x weight
+  init_log_vars: [-2.0, 0.5, 1.0]  # det (high priority), attr (medium), seg (low priority)
+  log_var_clamp: [-10, 10]
+
+  # 各任务损失权重（如果不用auto_weight）
+  manual_weights:
+    det: 1.0
+    attr: 1.0
+    seg: 1.0
+
+  # Detection Loss
+  detection:
+    bbox_loss: "CIoU"  # or "GIoU", "DIoU"
+    obj_loss: "BCE"
+    cls_loss: "BCE"  # or "FocalLoss"
+    focal_alpha: 0.25
+    focal_gamma: 2.0
+
+  # Attribute Loss
+  attribute:
+    type: "BCE"  # BCEWithLogitsLoss
+    # CRITICAL FIX: Add positive class weights for imbalanced attributes
+    # Based on validation: Attr #19 (0.2%), #25 (0.5%), #1 (1.2%), #12 (1.4%), #20 (1.9%)
+    # Formula: pos_weight = (num_negative / num_positive)
+    # For attributes with <5% positive, use higher weights (10-50x)
+    pos_weight: "auto"  # Will be calculated from dataset statistics in training code
+
+  # Segmentation Loss
+  segmentation:
+    ce_weight: 1.0
+    dice_weight: 1.0
+    # CRITICAL FIX: Add class weights to balance Road (95.61%) vs Lane (4.39%)
+    # Formula: weight = total_pixels / (num_classes * class_pixels)
+    # Lane should get ~20x weight compared to Road
+    class_weights: [1.0, 20.0]  # [Road, Lane] - heavily weight the rare Lane class
+
+# ===== 训练配置 =====
+train:
+  # 基础设置
+  epochs: 200  # INCREASED: Detection needs more training time
+  batch_size: 8  # 总batch（会分配到3个任务）
+  num_workers: 4
+  pin_memory: true
+
+  # 输入尺寸
+  img_size: 640
+
+  # 数据增强
+  augmentation:
+    mosaic: 0.7  # INCREASED: More aggressive augmentation helps detection
+    mixup: 0.15  # ENABLED: Mixup helps with detection generalization
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 10.0  # ENABLED: Rotation augmentation
+    translate: 0.1
+    scale: 0.5
+    shear: 2.0  # ENABLED: Shear augmentation
+    flipud: 0.0
+    fliplr: 0.5
+
+  # 优化器
+  optimizer:
+    type: "AdamW"  # or "SGD"
+    lr: 0.003  # INCREASED: Higher LR for faster detection learning (was 0.001)
+    weight_decay: 0.0001
+    momentum: 0.9  # for SGD
+    betas: [0.9, 0.999]  # for AdamW
+
+  # 学习率调度
+  scheduler:
+    type: "CosineAnnealingLR"  # or "MultiStepLR", "OneCycleLR"
+    warmup_epochs: 5  # INCREASED: Longer warmup for stability
+    warmup_lr: 0.0001
+    min_lr: 0.00001
+
+  # 梯度累积
+  accumulate_grad: 1  # 累积几个batch后更新
+
+  # 混合精度训练
+  amp: true
+
+  # EMA
+  ema:
+    enabled: true
+    decay: 0.9999
+
+  # 梯度冲突解决（可选）
+  grad_conflict:
+    use_pcgrad: false  # Project Conflicting Gradients
+    use_gradnorm: false  # GradNorm
+    gradnorm_alpha: 1.5
+
+  # 多任务采样策略
+  sampler:
+    type: "InterleavedSampler"  # 交错采样
+    shuffle: true
+
+# ===== 验证配置 =====
+val:
+  interval: 5  # 每5个epoch验证一次
+  batch_size: 16
+  img_size: 640
+
+  # 复合指标权重
+  # CRITICAL FIX: Heavily favor detection since it's currently failing
+  composite_metric:
+    det_weight: 0.6  # INCREASED from 0.4 - detection is priority
+    attr_weight: 0.25  # DECREASED from 0.3
+    seg_weight: 0.15  # DECREASED from 0.3 - already performing well
+
+# ===== 保存与日志 =====
+output:
+  save_dir: "runs/mtl_experiment"
+  save_interval: 5  # 每5个epoch保存checkpoint
+  save_best: true  # 保存最佳模型
+  resume: null  # 恢复训练的checkpoint路径
+
+# ===== 早停机制 =====
+early_stopping:
+  enabled: true
+  patience: 10        # 多少个epoch无改善后停止
+  min_delta: 0.001    # 最小改善幅度
+  monitor: "val_loss" # 监控指标：val_loss 或 composite_metric
+
+logging:
+  use_tensorboard: true
+  log_dir: "runs/logs"
+  print_interval: 50  # 每50个iteration打印一次
+
+# ===== 设备配置 =====
+device:
+  gpu_ids: [0]  # 使用的GPU ID列表，[0]为单卡
+  distributed: false  # 是否使用DDP多卡训练
+  seed: 42
