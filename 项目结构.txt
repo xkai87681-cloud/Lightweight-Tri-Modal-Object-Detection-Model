@@ -1,0 +1,38 @@
+├── configs/                # 配置文件
+│   ├── config.py          # 主配置文件
+│   └── __init__.py
+├── models/                 # 模型定义
+│   ├── backbone.py        # MobileNetV3 Backbone
+│   ├── neck.py            # YOLOv8 Neck (FPN+PAN)
+│   ├── det_head.py        # 检测头
+│   ├── seg_head.py        # 分割头
+│   ├── attr_head.py       # 属性识别头
+│   ├── attention.py       # 注意力机制 
+│   ├── mtl_model.py       # 多任务模型
+│   └── loss_weights.py    # AutomaticWeightedLoss
+├── losses/                 # 损失函数
+│   ├── det_loss.py        # 检测损失
+│   ├── seg_loss.py        # 分割损失（含Focal Loss
+│   ├── attr_loss.py       # 属性损失
+│   └── focal_bce.py       # Focal BCE Loss
+├── train/                  # 训练相关
+│   ├── train.py           # 主训练脚本
+│   ├── trainer.py         # Trainer类（含AutoLoss）
+│   ├── optimizer.py       # 优化器
+│   ├── ema.py             # EMA
+│   └── grad_utils.py      # 梯度工具
+├── data/                   # 数据加载
+│   ├── bdd100k_det.py     # BDD100K检测数据集
+│   ├── bdd100k_seg.py     # BDD100K分割数据集
+│   ├── pa100k_dataset.py  # PA100K属性数据集
+│   └── transforms.py      # 数据增强
+├── eval/                   # 评估
+│   ├── validate.py        # 验证脚本
+│   ├── det_metrics.py     # 检测指标
+│   ├── seg_metrics.py     # 分割指标
+│   └── attr_metrics.py    # 属性指标
+├── utils/                  # 工具函数
+├── scripts/                # 数据处理脚本
+├── checkpoints/            # 模型权重
+├── runs/                   # 训练日志和输出
+├── requirements.txt        # 依赖包
